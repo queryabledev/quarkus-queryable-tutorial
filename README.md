@@ -280,11 +280,17 @@ curl 'http://localhost:8080/api/teams?like.tags=react,java'
 curl 'http://localhost:8080/api/developers?like.surname=pi'
 ```
 
-Swagger UI is available at <http://localhost:8080/q/swagger-ui>.
+Swagger UI is available at <http://localhost:8080/q/swagger-ui> and the Dev UI
+endpoints overview at <http://localhost:8080/q/dev-ui/endpoints> (see below).
 
 ## Generated API
 
-For every `@QRs` entity, the extension exposes:
+For every `@QRs` entity the extension generates the full CRUD + count + filtered
+collection `GET`. These are all the routes exposed by the four entities of this
+tutorial ([`Address`](src/main/java/dev/queryable/tutorial/model/Address.java) is an
+`@Embeddable`, not a resource, so it has no routes):
+
+[`Customer`](src/main/java/dev/queryable/tutorial/model/Customer.java) — `/api/v1/customers` (authenticated):
 
 ```text
 POST   /api/v1/customers
@@ -292,8 +298,67 @@ GET    /api/v1/customers/{id}
 PUT    /api/v1/customers/{id}
 DELETE /api/v1/customers/{id}
 GET    /api/v1/customers/count
-GET    /api/v1/customers?like.name=mario&obj.countries=IT,DE&pageSize=10
+GET    /api/v1/customers            ?like.name=&obj.externalCode=&obj.countries=
+                                    &from.createdOn=&to.createdOn=&nil.notes=&notNil.notes=
+                                    &obj.active=&obj.coordinator_id=&obj.coordinator_country=
+                                    &address.city=&orderBy=&pageSize=&startRow=
 ```
+
+[`Developer`](src/main/java/dev/queryable/tutorial/model/Developer.java) — `/api/developers`:
+
+```text
+POST   /api/developers
+GET    /api/developers/{id}
+PUT    /api/developers/{id}
+DELETE /api/developers/{id}
+GET    /api/developers/count
+GET    /api/developers              ?obj.uuid=&like.name=&like.surname=
+                                    &obj.team_uuid=&obj.active=&orderBy=&pageSize=&startRow=
+```
+
+[`Team`](src/main/java/dev/queryable/tutorial/model/Team.java) — `/api/teams`:
+
+```text
+POST   /api/teams
+GET    /api/teams/{id}
+PUT    /api/teams/{id}
+DELETE /api/teams/{id}
+GET    /api/teams/count
+GET    /api/teams                   ?obj.uuid=&like.name=&like.tags=&orderBy=&pageSize=&startRow=
+```
+
+[`Project`](src/main/java/dev/queryable/tutorial/model/Project.java) — `/api/projects`:
+
+```text
+POST   /api/projects
+GET    /api/projects/{id}
+PUT    /api/projects/{id}
+DELETE /api/projects/{id}
+GET    /api/projects/count
+GET    /api/projects                ?obj.uuid=&like.name=&obj.budget=&from.budget=&to.budget=
+                                    &orderBy=&pageSize=&startRow=
+```
+
+Plus the tutorial-only audit resource ([`AuditServiceRs`](src/main/java/dev/queryable/tutorial/service/rs/AuditServiceRs.java)):
+
+```text
+GET    /test/audit
+DELETE /test/audit
+```
+
+## OpenAPI and Dev UI
+
+All generated routes are documented in OpenAPI (including the Queryable filter
+parameters, which appear on the collection `GET` operations):
+
+- OpenAPI schema: <http://localhost:8080/q/openapi>
+- Swagger UI: <http://localhost:8080/q/swagger-ui>
+- Dev UI endpoints overview: <http://localhost:8080/q/dev-ui/endpoints>
+
+This is the Dev UI endpoints page of this tutorial application in dev mode —
+every route above is generated at build time from the annotated entities:
+
+![Quarkus Dev UI — generated endpoints](docs/dev-ui-endpoints.png)
 
 ## Project layout
 
