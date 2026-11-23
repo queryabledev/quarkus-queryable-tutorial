@@ -25,116 +25,165 @@ class QueryableTutorialTest {
 
     @Test
     void protectsGeneratedRoutesWithQuarkusConfiguration() {
-        given().get("/api/v1/customers").then().statusCode(401);
-        authenticated().get("/api/v1/customers").then().statusCode(200);
+        given().get("/api/developers").then().statusCode(401);
+        authenticated().get("/api/developers").then().statusCode(200);
     }
 
     @Test
     void supportsQueryableFilterMatrixAndHeaders() {
         authenticated()
                 .queryParam("like.name", "mario")
-                .get("/api/v1/customers")
+                .get("/api/developers")
                 .then()
                 .statusCode(200)
-                .body("$", hasSize(2))
-                .header("listSize", "2");
+                .body("$", hasSize(1))
+                .body("[0].surname", equalTo("rossi"))
+                .header("listSize", "1");
 
         authenticated()
-                .queryParam("obj.countries", "IT,DE")
-                .queryParam("obj.active", "false")
-                .get("/api/v1/customers")
-                .then()
-                .statusCode(200)
-                .body("externalCode", hasItem("DE-003"));
-
-        authenticated()
-                .queryParam("from.createdOn", "2026-01-01")
-                .queryParam("to.createdOn", "2026-12-31")
-                .get("/api/v1/customers")
+                .queryParam("from.hiredOn", "2026-01-01")
+                .queryParam("to.hiredOn", "2026-12-31")
+                .get("/api/developers")
                 .then()
                 .statusCode(200)
                 .body("$", hasSize(2));
 
+        // legacy Queryable semantics: nil.<field> filters IS NOT NULL
         authenticated()
                 .queryParam("nil.notes", "1")
-                .get("/api/v1/customers")
+                .get("/api/developers")
                 .then()
                 .statusCode(200)
-                .body("$", hasSize(1));
+                .body("$", hasSize(1))
+                .body("[0].name", equalTo("mario"));
 
+        // and notNil.<field> filters IS NULL
         authenticated()
                 .queryParam("notNil.notes", "1")
-                .get("/api/v1/customers")
+                .get("/api/developers")
                 .then()
                 .statusCode(200)
-                .body("$", hasSize(1));
+                .body("$", hasSize(1))
+                .body("[0].name", equalTo("fiorenzo"));
 
         authenticated()
                 .queryParam("obj.active", "false")
-                .get("/api/v1/customers")
+                .get("/api/developers")
                 .then()
                 .statusCode(200)
-                .body("$", hasSize(1));
+                .body("$", hasSize(1))
+                .body("[0].name", equalTo("luigi"));
+
+        authenticated()
+                .queryParam("obj.team_uuid", "team-2")
+                .get("/api/developers")
+                .then()
+                .statusCode(200)
+                .body("$", hasSize(1))
+                .body("[0].name", equalTo("mario"));
     }
 
     @Test
     void supportsCustomContributorOrderingAndPagination() {
         authenticated()
-                .queryParam("address.city", "Milano")
-                .queryParam("orderBy", "name desc")
-                .queryParam("pageSize", "1")
-                .get("/api/v1/customers")
+                .queryParam("search", "ross")
+                .get("/api/developers")
                 .then()
                 .statusCode(200)
                 .body("$", hasSize(1))
-                .body("[0].name", equalTo("Mario Rossi"))
+                .body("[0].name", equalTo("mario"));
+
+        authenticated()
+                .queryParam("search", "i")
+                .queryParam("orderBy", "name desc")
+                .queryParam("pageSize", "1")
+                .get("/api/developers")
+                .then()
+                .statusCode(200)
+                .body("$", hasSize(1))
+                .body("[0].name", equalTo("mario"))
                 .header("pageSize", "1")
-                .header("listSize", "1");
+                .header("listSize", "2");
     }
 
     @Test
-    void appliesHibernateSubqueryToResultsAndCount() {
+    void filtersDevelopersByProjectWithHibernateFilter() {
         authenticated()
-                .queryParam("obj.coordinator_id", "1")
-                .queryParam("obj.coordinator_country", "IT")
-                .queryParam("pageSize", "1")
-                .get("/api/v1/customers")
+                .queryParam("obj.project_uuid", "proj-1")
+                .get("/api/developers")
                 .then()
                 .statusCode(200)
-                .body("$", hasSize(1))
-                .body("[0].externalCode", equalTo("IT-001"))
-                .header("listSize", "1");
+                .body("$", hasSize(2))
+                .body("[0].surname", equalTo("pizza"))
+                .body("[1].surname", equalTo("rossi"))
+                .header("listSize", "2");
 
+        // dev-3 is assigned to proj-2 but logically deleted
         authenticated()
-                .queryParam("obj.coordinator_id", "1")
-                .queryParam("obj.coordinator_country", "FR")
-                .get("/api/v1/customers")
+                .queryParam("obj.project_uuid", "proj-2")
+                .get("/api/developers")
                 .then()
                 .statusCode(200)
                 .body("$", hasSize(0))
                 .header("listSize", "0");
 
-        authenticated().get("/api/v1/customers")
+        authenticated()
+                .queryParam("obj.project_uuid", "proj-2")
+                .queryParam("obj.active", "false")
+                .get("/api/developers")
                 .then()
                 .statusCode(200)
-                .body("$", hasSize(2))
-                .header("listSize", "2");
+                .body("$", hasSize(1))
+                .body("[0].name", equalTo("luigi"));
+
+        authenticated()
+                .queryParam("obj.project_uuid", "unknown-project")
+                .get("/api/developers")
+                .then()
+                .statusCode(200)
+                .body("$", hasSize(0));
     }
 
     @Test
-    void rejectsInvalidOrIncompleteHibernateFilterParameters() {
-        authenticated()
-                .queryParam("obj.coordinator_id", "invalid")
-                .queryParam("obj.coordinator_country", "IT")
-                .get("/api/v1/customers")
-                .then()
-                .statusCode(400);
+    void filtersDevelopersByTeam() {
+        String alpha = createTeam("alpha", "calcio");
+        String beta = createTeam("beta", "basket");
 
+        String d1 = createDeveloper("anna", "bianchi", alpha);
+        String d2 = createDeveloper("bruno", "neri", alpha);
+        String d3 = createDeveloper("carla", "gialli", alpha);
+        String d4 = createDeveloper("dario", "viola", beta);
+        String d5 = createDeveloper("elena", "azzurri", beta);
+
+        // only the players of team alpha, ordered by surname
         authenticated()
-                .queryParam("obj.coordinator_id", "1")
-                .get("/api/v1/customers")
+                .queryParam("obj.team_uuid", alpha)
+                .get("/api/developers")
                 .then()
-                .statusCode(400);
+                .statusCode(200)
+                .body("$", hasSize(3))
+                .body("[0].surname", equalTo("bianchi"))
+                .body("[1].surname", equalTo("gialli"))
+                .body("[2].surname", equalTo("neri"))
+                .header("listSize", "3");
+
+        // only the players of team beta
+        authenticated()
+                .queryParam("obj.team_uuid", beta)
+                .get("/api/developers")
+                .then()
+                .statusCode(200)
+                .body("$", hasSize(2))
+                .body("[0].surname", equalTo("azzurri"))
+                .body("[1].surname", equalTo("viola"))
+                .header("listSize", "2");
+
+        for (String uuid : new String[] { d1, d2, d3, d4, d5 }) {
+            authenticated().delete("/api/developers/" + uuid).then().statusCode(204);
+        }
+        for (String uuid : new String[] { alpha, beta }) {
+            given().delete("/api/teams/" + uuid).then().statusCode(204);
+        }
     }
 
     @Test
@@ -142,13 +191,13 @@ class QueryableTutorialTest {
         authenticated()
                 .contentType(ContentType.JSON)
                 .body("""
-                        {"externalCode":"INVALID-CREATE","country":"US","active":true}
+                        {"name":"nosurname","team_uuid":"team-1","active":true}
                         """)
-                .post("/api/v1/customers")
+                .post("/api/developers")
                 .then()
                 .statusCode(400);
 
-        authenticated().get("/api/v1/customers/count")
+        authenticated().get("/api/developers/count")
                 .then()
                 .statusCode(200)
                 .body(is("3"));
@@ -160,17 +209,17 @@ class QueryableTutorialTest {
         authenticated()
                 .contentType(ContentType.JSON)
                 .body("""
-                        {"id":1,"name":null,"externalCode":"CHANGED","country":"US","active":true}
+                        {"uuid":"dev-1","name":null,"surname":"pizza","team_uuid":"team-1","active":true}
                         """)
-                .put("/api/v1/customers/1")
+                .put("/api/developers/dev-1")
                 .then()
                 .statusCode(400);
 
-        authenticated().get("/api/v1/customers/1")
+        authenticated().get("/api/developers/dev-1")
                 .then()
                 .statusCode(200)
-                .body("name", equalTo("Mario Rossi"))
-                .body("externalCode", equalTo("IT-001"));
+                .body("name", equalTo("fiorenzo"))
+                .body("surname", equalTo("pizza"));
         given().get("/test/audit").then().body("$", hasSize(0));
     }
 
@@ -180,23 +229,20 @@ class QueryableTutorialTest {
                 .contentType(ContentType.JSON)
                 .body("""
                         {
-                          "name": "New Customer",
-                          "externalCode": " new-004 ",
-                          "country": "US",
-                          "createdOn": "2026-03-01",
-                          "active": true,
-                          "address": {"city": "Boston"}
+                          "name": "nuovo",
+                          "surname": "sviluppatore",
+                          "team_uuid": "team-1",
+                          "hiredOn": "2026-03-01",
+                          "active": true
                         }
                         """)
-                .post("/api/v1/customers")
+                .post("/api/developers")
                 .then()
                 .statusCode(201)
-                .body("externalCode", equalTo("NEW-004"))
                 .body("creationUser", equalTo("alice"))
                 .body("creationDate", notNullValue())
                 .extract()
-                .path("id")
-                .toString();
+                .path("uuid");
 
         given().get("/test/audit")
                 .then()
@@ -206,16 +252,15 @@ class QueryableTutorialTest {
                 .contentType(ContentType.JSON)
                 .body("""
                         {
-                          "id": %s,
-                          "name": "New Customer Updated",
-                          "externalCode": "NEW-004",
-                          "country": "US",
-                          "createdOn": "2026-03-01",
-                          "active": true,
-                          "address": {"city": "Boston"}
+                          "uuid": "%s",
+                          "name": "nuovo",
+                          "surname": "aggiornato",
+                          "team_uuid": "team-1",
+                          "hiredOn": "2026-03-01",
+                          "active": true
                         }
                         """.formatted(created))
-                .put("/api/v1/customers/" + created)
+                .put("/api/developers/" + created)
                 .then()
                 .statusCode(204);
 
@@ -224,22 +269,22 @@ class QueryableTutorialTest {
                 .body("$", hasItem("UPDATE:" + created));
 
         authenticated()
-                .get("/api/v1/customers/" + created)
+                .get("/api/developers/" + created)
                 .then()
                 .statusCode(200)
-                .body("name", equalTo("New Customer Updated"))
+                .body("surname", equalTo("aggiornato"))
                 .body("updateUser", equalTo("alice"))
                 .body("updateDate", notNullValue())
                 .body("creationUser", equalTo("alice"))
                 .body("creationDate", notNullValue());
 
         authenticated()
-                .delete("/api/v1/customers/" + created)
+                .delete("/api/developers/" + created)
                 .then()
                 .statusCode(204);
 
         authenticated()
-                .get("/api/v1/customers/" + created)
+                .get("/api/developers/" + created)
                 .then()
                 .statusCode(404);
 
@@ -258,18 +303,17 @@ class QueryableTutorialTest {
                 .extract()
                 .asString();
         JsonPath document = JsonPath.from(documentText);
-        assertThat(document.getList("paths['/api/v1/customers'].get.parameters.name"), hasItem("like.name"));
-        assertThat(document.getList("paths['/api/v1/customers'].get.parameters.name"), hasItem("obj.coordinator_id"));
-        assertThat(document.getList("paths['/api/v1/customers'].get.parameters.name"), hasItem("obj.coordinator_country"));
-        assertThat(document.getMap("paths['/api/v1/customers'].post"), notNullValue());
-        assertThat(document.getMap("paths['/api/v1/customers/{id}'].put"), notNullValue());
-        assertThat(document.getMap("paths['/api/v1/customers/count'].get"), notNullValue());
+        assertThat(document.getList("paths['/api/developers'].get.parameters.name"), hasItem("like.surname"));
+        assertThat(document.getList("paths['/api/developers'].get.parameters.name"), hasItem("obj.project_uuid"));
+        assertThat(document.getMap("paths['/api/developers'].post"), notNullValue());
+        assertThat(document.getMap("paths['/api/developers/{id}'].put"), notNullValue());
+        assertThat(document.getMap("paths['/api/developers/count'].get"), notNullValue());
     }
 
     @Test
     void usesOfficialRestDataCountEndpoint() {
         authenticated()
-                .get("/api/v1/customers/count")
+                .get("/api/developers/count")
                 .then()
                 .statusCode(200)
                 .body(is("3"));
@@ -277,23 +321,6 @@ class QueryableTutorialTest {
 
     @Test
     void supportsOriginalQueryableTutorialEntities() {
-        String teamId = given()
-                .contentType(ContentType.JSON)
-                .body("""
-                        {"name":"secondo","tags":"typescript,react"}
-                        """)
-                .post("/api/teams")
-                .then()
-                .statusCode(201)
-                .extract().path("uuid");
-
-        given().contentType(ContentType.JSON)
-                .body("""
-                        {"name":"primo","tags":"java,angular"}
-                        """)
-                .post("/api/teams")
-                .then().statusCode(201);
-
         given().queryParam("like.tags", "react,java")
                 .get("/api/teams")
                 .then()
@@ -302,25 +329,38 @@ class QueryableTutorialTest {
                 .body("[0].name", equalTo("primo"))
                 .body("[1].name", equalTo("secondo"));
 
-        given().contentType(ContentType.JSON)
-                .body("""
-                        {
-                          "name":"fiorenzo",
-                          "surname":"pizza",
-                          "team_uuid":"%s",
-                          "active":true
-                        }
-                        """.formatted(teamId))
-                .post("/api/developers")
-                .then().statusCode(201);
-
-        given().queryParam("like.surname", "pi")
-                .queryParam("obj.team_uuid", teamId)
+        authenticated()
+                .queryParam("like.surname", "pi")
+                .queryParam("obj.team_uuid", "team-1")
                 .get("/api/developers")
                 .then()
                 .statusCode(200)
                 .body("$", hasSize(1))
                 .body("[0].name", equalTo("fiorenzo"));
+    }
+
+    private String createTeam(String name, String tags) {
+        return given()
+                .contentType(ContentType.JSON)
+                .body("""
+                        {"name":"%s","tags":"%s"}
+                        """.formatted(name, tags))
+                .post("/api/teams")
+                .then()
+                .statusCode(201)
+                .extract().path("uuid");
+    }
+
+    private String createDeveloper(String name, String surname, String teamUuid) {
+        return authenticated()
+                .contentType(ContentType.JSON)
+                .body("""
+                        {"name":"%s","surname":"%s","team_uuid":"%s","active":true}
+                        """.formatted(name, surname, teamUuid))
+                .post("/api/developers")
+                .then()
+                .statusCode(201)
+                .extract().path("uuid");
     }
 
     private io.restassured.specification.RequestSpecification authenticated() {

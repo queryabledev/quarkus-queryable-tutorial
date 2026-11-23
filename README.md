@@ -94,15 +94,19 @@ Test dependencies: `io.quarkus:quarkus-junit` and `io.rest-assured:rest-assured`
 
 ## Step 3 — Annotate the entities
 
-Entities live in [`src/main/java/dev/queryable/tutorial/model`](src/main/java/dev/queryable/tutorial/model).
+Entities live in [`src/main/java/dev/queryable/tutorial/model`](src/main/java/dev/queryable/tutorial/model):
+[`Developer`](src/main/java/dev/queryable/tutorial/model/Developer.java),
+[`Team`](src/main/java/dev/queryable/tutorial/model/Team.java) and
+[`Project`](src/main/java/dev/queryable/tutorial/model/Project.java).
 `@QRs` marks an entity as a REST resource; Quarkus generates the endpoints at
 build time (augmentation + Gizmo bytecode) — no REST source files appear in the
 application.
 
-The minimal example from the tutorial, [`Developer`](src/main/java/dev/queryable/tutorial/model/Developer.java):
+The central entity of the tutorial is `Developer`:
 
 ```java
 @Entity
+@Table(name = "developers")
 @QRs("/api/developers")
 @QOrderBy("surname asc")
 public class Developer extends PanacheEntityBase {
@@ -121,21 +125,29 @@ public class Developer extends PanacheEntityBase {
     @QList
     public String team_uuid;
 
+    @Q
+    public LocalDate hiredOn;
+
+    @QNil
+    @QNotNil(prefix = "notNil")
+    public String notes;
+
     @QLogicalDelete
     public boolean active = true;
 }
 ```
 
-The richer example, [`Customer`](src/main/java/dev/queryable/tutorial/model/Customer.java),
-shows the full annotation matrix:
+The annotation matrix, with the query parameters it enables on
+`GET /api/developers` (and `GET /api/teams` for `@QLikeList`):
 
 | Annotation | Query parameter | Semantics |
 |---|---|---|
-| `@QLike` | `like.name=mario` | case-insensitive `LIKE %…%` |
+| `@QLike` | `like.surname=pi` | case-insensitive `LIKE %…%` |
 | `@QLikeList` | `like.tags=react,java` | `LIKE` over comma-separated values |
-| `@Q` | `obj.externalCode=IT-001`, `from.createdOn=…`, `to.createdOn=…` | equality and range filters |
-| `@QList(name = "countries")` | `obj.countries=IT,DE` | `IN (…)` with a custom parameter name |
-| `@QNil` / `@QNotNil(prefix = "notNil")` | `nil.notes=1` / `notNil.notes=1` | `IS NULL` / `IS NOT NULL` |
+| `@Q` | `obj.hiredOn=…`, `from.hiredOn=…`, `to.hiredOn=…` | equality and range filters |
+| `@QList` | `obj.team_uuid=team-1,team-2` | `IN (…)` |
+| `@QNil` | `nil.notes=1` | `IS NOT NULL` (legacy Queryable semantics) |
+| `@QNotNil(prefix = "notNil")` | `notNil.notes=1` | `IS NULL` (legacy Queryable semantics) |
 | `@QLogicalDelete` | `obj.active=false` | logical delete flag, defaults to active records |
 | `@QOrderBy("surname asc")` | `orderBy=name desc` | default and per-request sorting |
 
@@ -146,26 +158,30 @@ Pagination is built in: `pageSize` and `startRow` query parameters, with
 
 Filters beyond the annotation matrix go in `service/filters` as CDI beans
 implementing `QueryableFilter<T>`. See
-[`CustomerFilter`](src/main/java/dev/queryable/tutorial/service/filters/CustomerFilter.java),
-which adds a Criteria API predicate for the `address.city` parameter of the
-embedded `Address`:
+[`DeveloperFilter`](src/main/java/dev/queryable/tutorial/service/filters/DeveloperFilter.java),
+which adds a `search` parameter matching name **or** surname — an `OR` across
+fields that annotations cannot express:
 
 ```java
 @ApplicationScoped
-public class CustomerFilter implements QueryableFilter<Customer> {
+public class DeveloperFilter implements QueryableFilter<Developer> {
 
     @Override
-    public void contribute(QueryableFilterContext<Customer> context) {
-        String city = context.param("address.city");
-        if (city != null) {
-            context.add(context.criteriaBuilder().equal(
-                    context.root().get("address").get("city"), city));
+    public void contribute(QueryableFilterContext<Developer> context) {
+        String search = context.param("search");
+        if (search != null && !search.isBlank()) {
+            String pattern = "%" + search.toLowerCase(Locale.ROOT) + "%";
+            context.add(context.criteriaBuilder().or(
+                    context.criteriaBuilder().like(
+                            context.criteriaBuilder().lower(context.root().get("name")), pattern),
+                    context.criteriaBuilder().like(
+                            context.criteriaBuilder().lower(context.root().get("surname")), pattern)));
         }
     }
 }
 ```
 
-Since 4.0.1 the entity type is inferred from the `QueryableFilter<Customer>`
+Since 4.0.1 the entity type is inferred from the `QueryableFilter<Developer>`
 generic (including through generic superclasses); overriding `entityType()` is
 still supported but no longer necessary.
 
@@ -174,42 +190,53 @@ still supported but no longer necessary.
 For conditions that are easier to express as SQL — subqueries in particular —
 you can keep using the classic Hibernate `@FilterDef`/`@Filter` technique and
 connect each filter parameter to a REST query parameter with `@QFilter`
-(repeatable). See [`Customer`](src/main/java/dev/queryable/tutorial/model/Customer.java):
+(repeatable).
+
+In this tutorial, `Project` holds its members in an element collection
+(`project_developers` table), and `Developer` exposes a `@QFilter` that returns
+only the developers assigned to a given project. See
+[`Developer`](src/main/java/dev/queryable/tutorial/model/Developer.java):
 
 ```java
 @Entity
-@QRs("/api/v1/customers")
-@FilterDef(name = "Customer.coordinator", parameters = {
-        @ParamDef(name = "coordinator_id", type = BigDecimal.class),
-        @ParamDef(name = "country", type = String.class)
-})
-@Filter(name = "Customer.coordinator",
-    condition = "exists (select 1 from Customer coordinator where coordinator.id = {customer}.id "
-        + "and coordinator.id = :coordinator_id and coordinator.country = :country)",
+@Table(name = "developers")
+@QRs("/api/developers")
+@FilterDef(name = "Developer.project",
+    parameters = @ParamDef(name = "project_uuid", type = String.class))
+@Filter(name = "Developer.project",
+    condition = "exists (select 1 from project_developers pd "
+        + "where pd.developer_uuid = {developer}.uuid "
+        + "and pd.project_uuid = :project_uuid)",
     deduceAliasInjectionPoints = false,
-    aliases = @SqlFragmentAlias(alias = "customer", table = "Customer"))
-@QFilter(name = "Customer.coordinator", queryParam = "obj.coordinator_id", filterParam = "coordinator_id")
-@QFilter(name = "Customer.coordinator", queryParam = "obj.coordinator_country", filterParam = "country")
-public class Customer extends PanacheEntity { … }
+    aliases = @SqlFragmentAlias(alias = "developer", table = "developers"))
+@QFilter(name = "Developer.project", queryParam = "obj.project_uuid", filterParam = "project_uuid")
+public class Developer extends PanacheEntityBase { … }
 ```
 
-`GET /api/v1/customers?obj.coordinator_id=1&obj.coordinator_country=IT`
-activates the Hibernate filter on the generated collection endpoint (and on the
-query that computes the `listSize` header). Hibernate owns the SQL condition and
-converts the parameter values (`coordinator_id` → `BigDecimal`); invalid values
-and missing companion parameters return HTTP 400. Without the query parameters
-the filter is not activated.
+and the membership side on [`Project`](src/main/java/dev/queryable/tutorial/model/Project.java):
+
+```java
+@ElementCollection
+@CollectionTable(name = "project_developers", joinColumns = @JoinColumn(name = "project_uuid"))
+@Column(name = "developer_uuid")
+public List<String> developers_uuid = new ArrayList<>();
+```
+
+`GET /api/developers?obj.project_uuid=proj-1` activates the Hibernate filter on
+the generated collection endpoint (and on the query that computes the
+`listSize` header). Hibernate owns the SQL condition and converts the parameter
+values; without the query parameter the filter is not activated.
 
 ## Step 6 — REST lifecycle callbacks
 
 Lifecycle callbacks go in `service/listeners` as CDI beans implementing
 `QueryableRsListener<T>`. See
-[`CustomerListener`](src/main/java/dev/queryable/tutorial/service/listeners/CustomerListener.java):
+[`DeveloperListener`](src/main/java/dev/queryable/tutorial/service/listeners/DeveloperListener.java):
 
 - `@PrePersist` / `@PreUpdate` run **inside** the write transaction — used here
-  to validate the entity (throwing `BadRequestException` → HTTP 400, new in
-  4.0.1), normalize `externalCode` and set the audit fields (`creationUser`,
-  `updateUser`, …) from the `SecurityIdentity`;
+  to validate the entity (name and surname required, throwing
+  `BadRequestException` → HTTP 400, new in 4.0.1) and to set the audit fields
+  (`creationUser`, `updateUser`, …) from the `SecurityIdentity`;
 - `@PostPersist` / `@PostUpdate` / `@PostDelete` are registered as JTA
   synchronizations and run **after a successful commit** — used here to push
   events to the [`AuditSinkService`](src/main/java/dev/queryable/tutorial/service/AuditSinkService.java).
@@ -222,29 +249,32 @@ The audit trail is exposed for inspection by
 at `GET /test/audit`.
 
 Since 4.0.1 the listener entity type is also inferred from the
-`QueryableRsListener<Customer>` generic.
+`QueryableRsListener<Developer>` generic.
 
 ## Step 7 — Configuration and seed data
 
 [`application.properties`](src/main/resources/application.properties) configures
 the H2 in-memory datasource, schema generation, and the embedded test user.
-Security remains standard Quarkus configuration:
+Security remains standard Quarkus configuration — `/api/developers` requires
+authentication, while `/api/teams` and `/api/projects` stay open:
 
 ```properties
 quarkus.http.auth.basic=true
-quarkus.http.auth.permission.customer.paths=/api/v1/customers/*
-quarkus.http.auth.permission.customer.policy=authenticated
-quarkus.http.auth.permission.customer-list.paths=/api/v1/customers
-quarkus.http.auth.permission.customer-list.policy=authenticated
+quarkus.http.auth.permission.developers.paths=/api/developers/*
+quarkus.http.auth.permission.developers.policy=authenticated
+quarkus.http.auth.permission.developers-list.paths=/api/developers
+quarkus.http.auth.permission.developers-list.policy=authenticated
 ```
 
-[`import.sql`](src/main/resources/import.sql) seeds three customers at startup.
+[`import.sql`](src/main/resources/import.sql) seeds two teams, three developers
+(one logically deleted) and two projects with their members at startup.
 
 ## Step 8 — Run the tests
 
 [`QueryableTutorialTest`](src/test/java/dev/queryable/tutorial/QueryableTutorialTest.java)
-exercises security, the filter matrix, Hibernate `@QFilter` subqueries, custom
-contributors, pagination, lifecycle hooks, validation, OpenAPI and the count
+exercises security, the filter matrix, the Hibernate `@QFilter` project
+subquery, the custom contributor, team filtering with dynamically created
+developers, pagination, lifecycle hooks, validation, OpenAPI and the count
 endpoint:
 
 ```bash
@@ -263,21 +293,21 @@ Then try the generated API (user `alice`, password `secret`):
 
 ```bash
 # collection GET with Queryable filters
-curl -u alice:secret 'http://localhost:8080/api/v1/customers?like.name=mario'
-curl -u alice:secret 'http://localhost:8080/api/v1/customers?obj.countries=IT,DE&obj.active=false'
-curl -u alice:secret 'http://localhost:8080/api/v1/customers?from.createdOn=2026-01-01&to.createdOn=2026-12-31'
-curl -u alice:secret 'http://localhost:8080/api/v1/customers?address.city=Milano&orderBy=name desc&pageSize=1'
+curl -u alice:secret 'http://localhost:8080/api/developers?like.surname=pi'
+curl -u alice:secret 'http://localhost:8080/api/developers?obj.team_uuid=team-1'
+curl -u alice:secret 'http://localhost:8080/api/developers?from.hiredOn=2026-01-01&to.hiredOn=2026-12-31'
+curl -u alice:secret 'http://localhost:8080/api/developers?search=ross&orderBy=name desc&pageSize=10'
 
-# Hibernate filter via @QFilter (4.0.1)
-curl -u alice:secret 'http://localhost:8080/api/v1/customers?obj.coordinator_id=1&obj.coordinator_country=IT'
+# Hibernate filter via @QFilter (4.0.1): only the developers of a project
+curl -u alice:secret 'http://localhost:8080/api/developers?obj.project_uuid=proj-1'
 
 # standard REST Data Panache endpoints
-curl -u alice:secret 'http://localhost:8080/api/v1/customers/count'
-curl -u alice:secret 'http://localhost:8080/api/v1/customers/1'
+curl -u alice:secret 'http://localhost:8080/api/developers/count'
+curl -u alice:secret 'http://localhost:8080/api/developers/dev-1'
 
 # unsecured tutorial entities
 curl 'http://localhost:8080/api/teams?like.tags=react,java'
-curl 'http://localhost:8080/api/developers?like.surname=pi'
+curl 'http://localhost:8080/api/projects?like.name=query'
 ```
 
 Swagger UI is available at <http://localhost:8080/q/swagger-ui> and the Dev UI
@@ -286,25 +316,10 @@ endpoints overview at <http://localhost:8080/q/dev-ui/endpoints> (see below).
 ## Generated API
 
 For every `@QRs` entity the extension generates the full CRUD + count + filtered
-collection `GET`. These are all the routes exposed by the four entities of this
-tutorial ([`Address`](src/main/java/dev/queryable/tutorial/model/Address.java) is an
-`@Embeddable`, not a resource, so it has no routes):
+collection `GET`. These are all the routes exposed by the three entities of this
+tutorial:
 
-[`Customer`](src/main/java/dev/queryable/tutorial/model/Customer.java) — `/api/v1/customers` (authenticated):
-
-```text
-POST   /api/v1/customers
-GET    /api/v1/customers/{id}
-PUT    /api/v1/customers/{id}
-DELETE /api/v1/customers/{id}
-GET    /api/v1/customers/count
-GET    /api/v1/customers            ?like.name=&obj.externalCode=&obj.countries=
-                                    &from.createdOn=&to.createdOn=&nil.notes=&notNil.notes=
-                                    &obj.active=&obj.coordinator_id=&obj.coordinator_country=
-                                    &address.city=&orderBy=&pageSize=&startRow=
-```
-
-[`Developer`](src/main/java/dev/queryable/tutorial/model/Developer.java) — `/api/developers`:
+[`Developer`](src/main/java/dev/queryable/tutorial/model/Developer.java) — `/api/developers` (authenticated):
 
 ```text
 POST   /api/developers
@@ -312,8 +327,11 @@ GET    /api/developers/{id}
 PUT    /api/developers/{id}
 DELETE /api/developers/{id}
 GET    /api/developers/count
-GET    /api/developers              ?obj.uuid=&like.name=&like.surname=
-                                    &obj.team_uuid=&obj.active=&orderBy=&pageSize=&startRow=
+GET    /api/developers              ?obj.uuid=&like.name=&like.surname=&obj.team_uuid=
+                                    &obj.hiredOn=&from.hiredOn=&to.hiredOn=
+                                    &nil.notes=&notNil.notes=&obj.active=
+                                    &obj.project_uuid=&search=
+                                    &orderBy=&pageSize=&startRow=
 ```
 
 [`Team`](src/main/java/dev/queryable/tutorial/model/Team.java) — `/api/teams`:
@@ -364,13 +382,13 @@ every route above is generated at build time from the annotated entities:
 
 ```text
 src/main/java/dev/queryable/tutorial/
-├── model/                  # @QRs entities: Customer, Developer, Team, Project (+ Address @Embeddable)
+├── model/                  # @QRs entities: Developer, Team, Project
 └── service/
     ├── AuditSinkService.java  # collects post-commit audit events
     ├── filters/            # QueryableFilter contributors
-    │   └── CustomerFilter.java
+    │   └── DeveloperFilter.java
     ├── listeners/          # QueryableRsListener lifecycle callbacks
-    │   └── CustomerListener.java
+    │   └── DeveloperListener.java
     └── rs/                 # plain JAX-RS resources
         └── AuditServiceRs.java
 ```
