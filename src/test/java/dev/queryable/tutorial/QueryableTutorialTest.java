@@ -93,6 +93,88 @@ class QueryableTutorialTest {
     }
 
     @Test
+    void appliesHibernateSubqueryToResultsAndCount() {
+        authenticated()
+                .queryParam("obj.coordinator_id", "1")
+                .queryParam("obj.coordinator_country", "IT")
+                .queryParam("pageSize", "1")
+                .get("/api/v1/customers")
+                .then()
+                .statusCode(200)
+                .body("$", hasSize(1))
+                .body("[0].externalCode", equalTo("IT-001"))
+                .header("listSize", "1");
+
+        authenticated()
+                .queryParam("obj.coordinator_id", "1")
+                .queryParam("obj.coordinator_country", "FR")
+                .get("/api/v1/customers")
+                .then()
+                .statusCode(200)
+                .body("$", hasSize(0))
+                .header("listSize", "0");
+
+        authenticated().get("/api/v1/customers")
+                .then()
+                .statusCode(200)
+                .body("$", hasSize(2))
+                .header("listSize", "2");
+    }
+
+    @Test
+    void rejectsInvalidOrIncompleteHibernateFilterParameters() {
+        authenticated()
+                .queryParam("obj.coordinator_id", "invalid")
+                .queryParam("obj.coordinator_country", "IT")
+                .get("/api/v1/customers")
+                .then()
+                .statusCode(400);
+
+        authenticated()
+                .queryParam("obj.coordinator_id", "1")
+                .get("/api/v1/customers")
+                .then()
+                .statusCode(400);
+    }
+
+    @Test
+    void rejectsInvalidCreateBeforePersistence() {
+        authenticated()
+                .contentType(ContentType.JSON)
+                .body("""
+                        {"externalCode":"INVALID-CREATE","country":"US","active":true}
+                        """)
+                .post("/api/v1/customers")
+                .then()
+                .statusCode(400);
+
+        authenticated().get("/api/v1/customers/count")
+                .then()
+                .statusCode(200)
+                .body(is("3"));
+        given().get("/test/audit").then().body("$", hasSize(0));
+    }
+
+    @Test
+    void rejectsInvalidUpdateBeforePersistence() {
+        authenticated()
+                .contentType(ContentType.JSON)
+                .body("""
+                        {"id":1,"name":null,"externalCode":"CHANGED","country":"US","active":true}
+                        """)
+                .put("/api/v1/customers/1")
+                .then()
+                .statusCode(400);
+
+        authenticated().get("/api/v1/customers/1")
+                .then()
+                .statusCode(200)
+                .body("name", equalTo("Mario Rossi"))
+                .body("externalCode", equalTo("IT-001"));
+        given().get("/test/audit").then().body("$", hasSize(0));
+    }
+
+    @Test
     void invokesRestLifecycleHooks() {
         String created = authenticated()
                 .contentType(ContentType.JSON)
@@ -177,6 +259,8 @@ class QueryableTutorialTest {
                 .asString();
         JsonPath document = JsonPath.from(documentText);
         assertThat(document.getList("paths['/api/v1/customers'].get.parameters.name"), hasItem("like.name"));
+        assertThat(document.getList("paths['/api/v1/customers'].get.parameters.name"), hasItem("obj.coordinator_id"));
+        assertThat(document.getList("paths['/api/v1/customers'].get.parameters.name"), hasItem("obj.coordinator_country"));
         assertThat(document.getMap("paths['/api/v1/customers'].post"), notNullValue());
         assertThat(document.getMap("paths['/api/v1/customers/{id}'].put"), notNullValue());
         assertThat(document.getMap("paths['/api/v1/customers/count'].get"), notNullValue());

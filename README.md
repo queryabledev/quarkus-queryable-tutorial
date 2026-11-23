@@ -1,7 +1,7 @@
 # Quarkus Queryable Tutorial
 
 A complete, runnable example of the [Quarkus Queryable](https://github.com/queryabledev/quarkus-queryable)
-extension (version **4.0.0**), following the tutorial at
+extension (version **4.0.1**), following the tutorial at
 [queryable.dev/quarkus-extension.html](https://queryable.dev/quarkus-extension.html).
 
 Queryable is a Quarkus extension that adds annotation-driven collection filters to
@@ -12,19 +12,31 @@ contributes the collection `GET` endpoint and its richer query language.
 This project demonstrates:
 
 - annotation-driven filters (`@Q`, `@QLike`, `@QList`, `@QLikeList`, `@QNil`, `@QNotNil`, `@QLogicalDelete`, `@QOrderBy`)
+- Hibernate filters with SQL subqueries connected to REST parameters (`@QFilter`, new in 4.0.1)
 - custom filter contributors (`QueryableFilter`)
 - REST lifecycle callbacks (`QueryableRsListener` with `@PrePersist`, `@PreUpdate`, `@PostPersist`, `@PostUpdate`, `@PostDelete`)
+- validation of creates and updates in lifecycle callbacks using REST exceptions (new in 4.0.1)
 - security via standard Quarkus configuration
 - generated OpenAPI documentation
 - a full REST Assured test suite
+
+## What's new in 4.0.1
+
+- Connect REST parameters to existing Hibernate filters, including SQL
+  subqueries, with `@QFilter` (the classic `@FilterDef` technique).
+- The entity type is inferred from the `QueryableFilter<T>` and
+  `QueryableRsListener<T>` generics — no more `entityType()` override.
+- Validate creates and updates in lifecycle callbacks by throwing Jakarta REST
+  exceptions (e.g. `BadRequestException` → HTTP 400).
+
+Known limitation: `QOption.EXECUTE_ALWAYS` and `WITHOUT_PARAMETERS` are not
+applied by this extension.
 
 ## Prerequisites
 
 - Java 21+
 - Maven 3.9+ (or the included `./mvnw` wrapper)
-- the `dev.queryable:quarkus-queryable:4.0.0` extension available in your Maven
-  repository (from Maven Central, or built locally with `mvn clean install` from
-  the [quarkus-queryable](https://github.com/queryabledev/quarkus-queryable) repository)
+- the `dev.queryable:quarkus-queryable:4.0.1` extension (available on Maven Central)
 
 ## Step 1 — Scaffold the project
 
@@ -49,7 +61,7 @@ Add the Queryable extension and its companions to [`pom.xml`](pom.xml):
 <dependency>
     <groupId>dev.queryable</groupId>
     <artifactId>quarkus-queryable</artifactId>
-    <version>4.0.0</version>
+    <version>4.0.1</version>
 </dependency>
 <!-- JSON serialization -->
 <dependency>
@@ -143,11 +155,6 @@ embedded `Address`:
 public class CustomerFilter implements QueryableFilter<Customer> {
 
     @Override
-    public Class<Customer> entityType() {
-        return Customer.class;
-    }
-
-    @Override
     public void contribute(QueryableFilterContext<Customer> context) {
         String city = context.param("address.city");
         if (city != null) {
@@ -158,14 +165,50 @@ public class CustomerFilter implements QueryableFilter<Customer> {
 }
 ```
 
-## Step 5 — REST lifecycle callbacks
+Since 4.0.1 the entity type is inferred from the `QueryableFilter<Customer>`
+generic (including through generic superclasses); overriding `entityType()` is
+still supported but no longer necessary.
+
+## Step 5 — Hibernate filters with `@QFilter` (4.0.1)
+
+For conditions that are easier to express as SQL — subqueries in particular —
+you can keep using the classic Hibernate `@FilterDef`/`@Filter` technique and
+connect each filter parameter to a REST query parameter with `@QFilter`
+(repeatable). See [`Customer`](src/main/java/dev/queryable/tutorial/model/Customer.java):
+
+```java
+@Entity
+@QRs("/api/v1/customers")
+@FilterDef(name = "Customer.coordinator", parameters = {
+        @ParamDef(name = "coordinator_id", type = BigDecimal.class),
+        @ParamDef(name = "country", type = String.class)
+})
+@Filter(name = "Customer.coordinator",
+    condition = "exists (select 1 from Customer coordinator where coordinator.id = {customer}.id "
+        + "and coordinator.id = :coordinator_id and coordinator.country = :country)",
+    deduceAliasInjectionPoints = false,
+    aliases = @SqlFragmentAlias(alias = "customer", table = "Customer"))
+@QFilter(name = "Customer.coordinator", queryParam = "obj.coordinator_id", filterParam = "coordinator_id")
+@QFilter(name = "Customer.coordinator", queryParam = "obj.coordinator_country", filterParam = "country")
+public class Customer extends PanacheEntity { … }
+```
+
+`GET /api/v1/customers?obj.coordinator_id=1&obj.coordinator_country=IT`
+activates the Hibernate filter on the generated collection endpoint (and on the
+query that computes the `listSize` header). Hibernate owns the SQL condition and
+converts the parameter values (`coordinator_id` → `BigDecimal`); invalid values
+and missing companion parameters return HTTP 400. Without the query parameters
+the filter is not activated.
+
+## Step 6 — REST lifecycle callbacks
 
 Lifecycle callbacks go in `service/listeners` as CDI beans implementing
 `QueryableRsListener<T>`. See
 [`CustomerListener`](src/main/java/dev/queryable/tutorial/service/listeners/CustomerListener.java):
 
 - `@PrePersist` / `@PreUpdate` run **inside** the write transaction — used here
-  to normalize `externalCode` and set the audit fields (`creationUser`,
+  to validate the entity (throwing `BadRequestException` → HTTP 400, new in
+  4.0.1), normalize `externalCode` and set the audit fields (`creationUser`,
   `updateUser`, …) from the `SecurityIdentity`;
 - `@PostPersist` / `@PostUpdate` / `@PostDelete` are registered as JTA
   synchronizations and run **after a successful commit** — used here to push
@@ -178,7 +221,10 @@ The audit trail is exposed for inspection by
 [`AuditServiceRs`](src/main/java/dev/queryable/tutorial/service/rs/AuditServiceRs.java)
 at `GET /test/audit`.
 
-## Step 6 — Configuration and seed data
+Since 4.0.1 the listener entity type is also inferred from the
+`QueryableRsListener<Customer>` generic.
+
+## Step 7 — Configuration and seed data
 
 [`application.properties`](src/main/resources/application.properties) configures
 the H2 in-memory datasource, schema generation, and the embedded test user.
@@ -194,17 +240,18 @@ quarkus.http.auth.permission.customer-list.policy=authenticated
 
 [`import.sql`](src/main/resources/import.sql) seeds three customers at startup.
 
-## Step 7 — Run the tests
+## Step 8 — Run the tests
 
 [`QueryableTutorialTest`](src/test/java/dev/queryable/tutorial/QueryableTutorialTest.java)
-exercises security, the filter matrix, custom contributors, pagination,
-lifecycle hooks, OpenAPI and the count endpoint:
+exercises security, the filter matrix, Hibernate `@QFilter` subqueries, custom
+contributors, pagination, lifecycle hooks, validation, OpenAPI and the count
+endpoint:
 
 ```bash
 ./mvnw clean test
 ```
 
-Expected result: `Tests run: 7, Failures: 0, Errors: 0, Skipped: 0`.
+Expected result: `Tests run: 11, Failures: 0, Errors: 0, Skipped: 0`.
 
 ## Run in dev mode
 
@@ -220,6 +267,9 @@ curl -u alice:secret 'http://localhost:8080/api/v1/customers?like.name=mario'
 curl -u alice:secret 'http://localhost:8080/api/v1/customers?obj.countries=IT,DE&obj.active=false'
 curl -u alice:secret 'http://localhost:8080/api/v1/customers?from.createdOn=2026-01-01&to.createdOn=2026-12-31'
 curl -u alice:secret 'http://localhost:8080/api/v1/customers?address.city=Milano&orderBy=name desc&pageSize=1'
+
+# Hibernate filter via @QFilter (4.0.1)
+curl -u alice:secret 'http://localhost:8080/api/v1/customers?obj.coordinator_id=1&obj.coordinator_country=IT'
 
 # standard REST Data Panache endpoints
 curl -u alice:secret 'http://localhost:8080/api/v1/customers/count'

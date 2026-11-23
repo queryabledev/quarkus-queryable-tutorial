@@ -5,6 +5,7 @@ import java.util.Locale;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.BadRequestException;
 
 import dev.queryable.tutorial.model.Customer;
 import dev.queryable.tutorial.service.AuditSinkService;
@@ -20,9 +21,13 @@ import io.quarkus.security.identity.SecurityIdentity;
 /**
  * REST lifecycle callbacks for Customer.
  *
- * Pre-* callbacks run inside the write transaction (auditing fields,
- * normalization). Post-* callbacks are registered as JTA synchronizations
- * and run only after a successful commit (external side effects).
+ * Pre-* callbacks run inside the write transaction (validation, auditing
+ * fields, normalization). Post-* callbacks are registered as JTA
+ * synchronizations and run only after a successful commit (external side
+ * effects).
+ *
+ * Since 4.0.1 the entity type is inferred from the
+ * {@code QueryableRsListener<Customer>} generic, no override needed.
  */
 @ApplicationScoped
 public class CustomerListener implements QueryableRsListener<Customer> {
@@ -33,9 +38,14 @@ public class CustomerListener implements QueryableRsListener<Customer> {
     @Inject
     SecurityIdentity securityIdentity;
 
-    @Override
-    public Class<Customer> entityType() {
-        return Customer.class;
+    // Validation (4.0.1): throw a Jakarta REST exception to reject the
+    // request before the write; an invalid POST/PUT returns HTTP 400.
+    @PrePersist
+    @PreUpdate
+    void validate(Customer customer) {
+        if (customer.name == null || customer.name.isBlank()) {
+            throw new BadRequestException("name is required");
+        }
     }
 
     @PrePersist
