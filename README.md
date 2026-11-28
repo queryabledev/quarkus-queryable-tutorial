@@ -1,7 +1,7 @@
 # Quarkus Queryable Tutorial
 
-A complete, runnable example of the [Quarkus Queryable](https://github.com/queryabledev/quarkus-queryable)
-extension (version **4.0.1**), following the tutorial at
+A complete, runnable example of the [Quarkus Queryable](https://github.com/quarkiverse/quarkus-queryable)
+extension (version **4.0.4**), following the tutorial at
 [queryable.dev/quarkus-extension.html](https://queryable.dev/quarkus-extension.html).
 
 Queryable is a Quarkus extension that adds annotation-driven collection filters to
@@ -12,45 +12,38 @@ contributes the collection `GET` endpoint and its richer query language.
 This project demonstrates:
 
 - annotation-driven filters (`@Q`, `@QLike`, `@QList`, `@QLikeList`, `@QNil`, `@QNotNil`, `@QLogicalDelete`, `@QOrderBy`)
-- Hibernate filters with SQL subqueries connected to REST parameters (`@QFilter`, new in 4.0.1)
+- Hibernate filters with SQL subqueries connected to REST parameters (`@QFilter`)
 - custom filter contributors (`QueryableFilter`)
 - REST lifecycle callbacks (`QueryableRsListener` with `@PrePersist`, `@PreUpdate`, `@PostPersist`, `@PostUpdate`, `@PostDelete`)
-- validation of creates and updates in lifecycle callbacks using REST exceptions (new in 4.0.1)
+- validation of creates and updates in lifecycle callbacks using REST exceptions
 - security via standard Quarkus configuration
 - generated OpenAPI documentation
 - a full REST Assured test suite
-
-## What's new in 4.0.1
-
-- Connect REST parameters to existing Hibernate filters, including SQL
-  subqueries, with `@QFilter` (the classic `@FilterDef` technique).
-- The entity type is inferred from the `QueryableFilter<T>` and
-  `QueryableRsListener<T>` generics — no more `entityType()` override.
-- Validate creates and updates in lifecycle callbacks by throwing Jakarta REST
-  exceptions (e.g. `BadRequestException` → HTTP 400).
 
 Known limitation: `QOption.EXECUTE_ALWAYS` and `WITHOUT_PARAMETERS` are not
 applied by this extension.
 
 ## Prerequisites
 
-- Java 21+
+- Java 25+ (the Maven compiler targets Java 25)
 - Maven 3.9+ (or the included `./mvnw` wrapper)
-- the `dev.queryable:quarkus-queryable:4.0.1` extension (available on Maven Central)
+- the `io.quarkiverse.queryable:quarkus-queryable:4.0.4` extension (available on Maven Central)
+
+This tutorial uses Quarkus **4.0.1**.
 
 ## Step 1 — Scaffold the project
 
-The project skeleton was generated with the Quarkus Maven plugin:
+To generate a matching project skeleton with the Quarkus Maven plugin:
 
 ```bash
-mvn io.quarkus.platform:quarkus-maven-plugin:3.40.1.2:create \
+mvn io.quarkus.platform:quarkus-maven-plugin:4.0.1:create \
     -DprojectGroupId=dev.queryable.tutorial \
     -DprojectArtifactId=quarkus-queryable-tutorial \
     -DnoCode
 ```
 
 This creates the Maven wrapper, the `pom.xml` with the Quarkus BOM
-(`io.quarkus.platform:quarkus-bom:3.40.1.2`), Dockerfiles and an empty
+(`io.quarkus.platform:quarkus-bom:4.0.1`), Dockerfiles and an empty
 `src/main/resources/application.properties`.
 
 ## Step 2 — Add the dependencies
@@ -59,19 +52,14 @@ Add the Queryable extension and its companions to [`pom.xml`](pom.xml):
 
 ```xml
 <dependency>
-    <groupId>dev.queryable</groupId>
+    <groupId>io.quarkiverse.queryable</groupId>
     <artifactId>quarkus-queryable</artifactId>
-    <version>4.0.1</version>
+    <version>4.0.4</version>
 </dependency>
 <!-- JSON serialization -->
 <dependency>
     <groupId>io.quarkus</groupId>
     <artifactId>quarkus-rest-jackson</artifactId>
-</dependency>
-<!-- Panache entities -->
-<dependency>
-    <groupId>io.quarkus</groupId>
-    <artifactId>quarkus-hibernate-orm-panache</artifactId>
 </dependency>
 <!-- JDBC driver: H2 in-memory for the tutorial, use your own in production -->
 <dependency>
@@ -89,6 +77,10 @@ Add the Queryable extension and its companions to [`pom.xml`](pom.xml):
     <artifactId>quarkus-smallrye-openapi</artifactId>
 </dependency>
 ```
+
+Queryable brings Hibernate ORM REST Data with Panache transitively.
+The JSON extension and the selected JDBC driver must be declared explicitly;
+Queryable does not provide either one.
 
 Test dependencies: `io.quarkus:quarkus-junit` and `io.rest-assured:rest-assured`.
 
@@ -181,11 +173,11 @@ public class DeveloperFilter implements QueryableFilter<Developer> {
 }
 ```
 
-Since 4.0.1 the entity type is inferred from the `QueryableFilter<Developer>`
+The entity type is inferred from the `QueryableFilter<Developer>`
 generic (including through generic superclasses); overriding `entityType()` is
 still supported but no longer necessary.
 
-## Step 5 — Hibernate filters with `@QFilter` (4.0.1)
+## Step 5 — Hibernate filters with `@QFilter`
 
 For conditions that are easier to express as SQL — subqueries in particular —
 you can keep using the classic Hibernate `@FilterDef`/`@Filter` technique and
@@ -235,7 +227,7 @@ Lifecycle callbacks go in `service/listeners` as CDI beans implementing
 
 - `@PrePersist` / `@PreUpdate` run **inside** the write transaction — used here
   to validate the entity (name and surname required, throwing
-  `BadRequestException` → HTTP 400, new in 4.0.1) and to set the audit fields
+  `BadRequestException` → HTTP 400) and to set the audit fields
   (`creationUser`, `updateUser`, …) from the `SecurityIdentity`;
 - `@PostPersist` / `@PostUpdate` / `@PostDelete` are registered as JTA
   synchronizations and run **after a successful commit** — used here to push
@@ -248,7 +240,7 @@ The audit trail is exposed for inspection by
 [`AuditServiceRs`](src/main/java/dev/queryable/tutorial/service/rs/AuditServiceRs.java)
 at `GET /test/audit`.
 
-Since 4.0.1 the listener entity type is also inferred from the
+The listener entity type is also inferred from the
 `QueryableRsListener<Developer>` generic.
 
 ## Step 7 — Configuration and seed data
@@ -298,7 +290,7 @@ curl -u alice:secret 'http://localhost:8080/api/developers?obj.team_uuid=team-1'
 curl -u alice:secret 'http://localhost:8080/api/developers?from.hiredOn=2026-01-01&to.hiredOn=2026-12-31'
 curl -u alice:secret 'http://localhost:8080/api/developers?search=ross&orderBy=name desc&pageSize=10'
 
-# Hibernate filter via @QFilter (4.0.1): only the developers of a project
+# Hibernate filter via @QFilter: only the developers of a project
 curl -u alice:secret 'http://localhost:8080/api/developers?obj.project_uuid=proj-1'
 
 # standard REST Data Panache endpoints
@@ -395,8 +387,8 @@ src/main/java/dev/queryable/tutorial/
 
 ## Documentation
 
-- [Getting started](https://github.com/queryabledev/quarkus-queryable#readme)
-- [Filters](https://github.com/queryabledev/quarkus-queryable/blob/main/docs/modules/ROOT/pages/filters.adoc)
-- [REST lifecycle](https://github.com/queryabledev/quarkus-queryable/blob/main/docs/modules/ROOT/pages/lifecycle.adoc)
-- [Security](https://github.com/queryabledev/quarkus-queryable/blob/main/docs/modules/ROOT/pages/security.adoc)
-- [Testing real applications](https://github.com/queryabledev/quarkus-queryable/blob/main/docs/modules/ROOT/pages/testing.adoc)
+- [Getting started](https://github.com/quarkiverse/quarkus-queryable#readme)
+- [Filters](https://github.com/quarkiverse/quarkus-queryable/blob/main/docs/modules/ROOT/pages/filters.adoc)
+- [REST lifecycle](https://github.com/quarkiverse/quarkus-queryable/blob/main/docs/modules/ROOT/pages/lifecycle.adoc)
+- [Security](https://github.com/quarkiverse/quarkus-queryable/blob/main/docs/modules/ROOT/pages/security.adoc)
+- [Testing real applications](https://github.com/quarkiverse/quarkus-queryable/blob/main/docs/modules/ROOT/pages/testing.adoc)

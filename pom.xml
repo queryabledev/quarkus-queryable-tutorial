@@ -3,7 +3,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>dev.queryable.tutorial</groupId>
     <artifactId>quarkus-queryable-tutorial</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>4.0.4</version>
     <packaging>quarkus</packaging>
 
     <properties>
@@ -13,8 +13,8 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
-        <quarkus.platform.version>3.40.1.2</quarkus.platform.version>
-        <quarkus-queryable.version>4.0.1</quarkus-queryable.version>
+        <quarkus.platform.version>4.0.1</quarkus.platform.version>
+        <quarkus-queryable.version>4.0.4</quarkus-queryable.version>
         <skipITs>true</skipITs>
         <surefire-plugin.version>3.5.6</surefire-plugin.version>
     </properties>
@@ -33,17 +33,13 @@
 
     <dependencies>
         <dependency>
-            <groupId>dev.queryable</groupId>
+            <groupId>io.quarkiverse.queryable</groupId>
             <artifactId>quarkus-queryable</artifactId>
             <version>${quarkus-queryable.version}</version>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-rest-jackson</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-hibernate-orm-panache</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
